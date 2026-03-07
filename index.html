@@ -6,11 +6,11 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <title>HackTJ Mobile Auth</title>
+    <title>Sentinel</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <link
@@ -24,10 +24,8 @@
   <body>
     <div class="app-root">
       <header class="app-header">
-        <div class="logo-mark">H</div>
         <div class="logo-text">
-          <span class="logo-main">HackAuth</span>
-          <span class="logo-sub">Supabase powered</span>
+          <span class="logo-main">Sentinel</span>
         </div>
       </header>
 
@@ -120,6 +118,15 @@
                 placeholder="Repeat your password"
               />
             </div>
+            <div class="form-field">
+              <label for="signup-role">Role</label>
+              <select id="signup-role" name="role" required>
+                <option value="" disabled selected>Select your role</option>
+                <option value="responder">Responder</option>
+                <option value="staff">Staff</option>
+                <option value="student">Student</option>
+              </select>
+            </div>
             <button id="signup-submit" class="primary-button" type="submit">
               Create account
             </button>
@@ -152,15 +159,8 @@
                   <span id="account-email" class="account-value"></span>
                 </div>
                 <div class="account-row">
-                  <span class="account-label">User ID</span>
-                  <span
-                    id="account-id"
-                    class="account-value account-value--mono"
-                  ></span>
-                </div>
-                <div class="account-row">
-                  <span class="account-label">Created</span>
-                  <span id="account-created" class="account-value"></span>
+                  <span class="account-label">Role</span>
+                  <span id="account-role" class="account-value"></span>
                 </div>
               </div>
             </div>
@@ -201,12 +201,10 @@
 
             <div class="home-panel home-panel--soft">
               <p class="home-title">Emergencies</p>
-              <p class="home-text" id="emergency-placeholder">
-                Listening for active emergencies from the control panel.
+              <p class="home-text" id="emergency-empty">
+                No emergencies yet.
               </p>
-              <p class="home-text" id="emergency-latest">
-                No emergencies received yet.
-              </p>
+              <ul id="emergency-list" class="emergency-list" aria-label="Active emergencies"></ul>
             </div>
           </div>
 
@@ -222,20 +220,29 @@
     </div>
 
     <div
-      id="emergency-toast"
-      class="emergency-toast emergency-toast--hidden"
+      id="emergency-popup-overlay"
+      class="emergency-popup-overlay emergency-popup--hidden"
       aria-live="assertive"
     >
-      <div
-        class="emergency-toast-title"
-        id="emergency-toast-title"
-      >
-        Emergency alert
+      <div class="emergency-popup">
+        <div class="emergency-popup-header">
+          <h2 class="emergency-popup-title" id="emergency-popup-title">
+            Emergency alert
+          </h2>
+          <button
+            type="button"
+            id="emergency-popup-close"
+            class="emergency-popup-close"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="emergency-popup-body">
+          <p class="emergency-popup-desc" id="emergency-popup-desc"></p>
+          <div class="emergency-popup-location" id="emergency-popup-location"></div>
+        </div>
       </div>
-      <div
-        class="emergency-toast-body"
-        id="emergency-toast-body"
-      ></div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

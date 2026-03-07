@@ -19,16 +19,17 @@ const authMessageEl = document.getElementById("auth-message");
 
 // Home screen elements
 const accountEmailEl = document.getElementById("account-email");
-const accountIdEl = document.getElementById("account-id");
-const accountCreatedEl = document.getElementById("account-created");
+const accountRoleEl = document.getElementById("account-role");
 const locationStatusEl = document.getElementById("location-status");
 const locationCoordsEl = document.getElementById("location-coords");
 const getLocationButton = document.getElementById("btn-get-location");
-const emergencyPlaceholderEl = document.getElementById("emergency-placeholder");
-const emergencyLatestEl = document.getElementById("emergency-latest");
-const emergencyToastEl = document.getElementById("emergency-toast");
-const emergencyToastTitleEl = document.getElementById("emergency-toast-title");
-const emergencyToastBodyEl = document.getElementById("emergency-toast-body");
+const emergencyListEl = document.getElementById("emergency-list");
+const emergencyEmptyEl = document.getElementById("emergency-empty");
+const emergencyPopupOverlayEl = document.getElementById("emergency-popup-overlay");
+const emergencyPopupTitleEl = document.getElementById("emergency-popup-title");
+const emergencyPopupDescEl = document.getElementById("emergency-popup-desc");
+const emergencyPopupLocationEl = document.getElementById("emergency-popup-location");
+const emergencyPopupCloseEl = document.getElementById("emergency-popup-close");
 
 const loginForm = document.getElementById("login-form");
 const signupForm = document.getElementById("signup-form");
@@ -42,12 +43,13 @@ const tabSignup = document.getElementById("tab-signup");
 // Map & current user state
 let mapInstance = null;
 let userMarker = null;
-let emergencyMarker = null;
+let emergencyMarker = null; // legacy single marker (not used for list)
+let emergencyMarkers = [];
 let currentUser = null;
 let locationIntervalId = null;
 let emergenciesChannel = null;
-let emergencyToastTimeoutId = null;
 let audioCtx = null;
+let emergenciesList = [];
 
 function setAuthMessage(message, type = "info") {
   authMessageEl.textContent = message || "";
@@ -91,16 +93,13 @@ function showAuth() {
 
 function showHome(user) {
   const email = user?.email ?? "";
-  const id = user?.id ?? "";
-  const createdAt = user?.created_at ?? "";
+  const role = user?.user_metadata?.role ?? "";
 
   currentUser = user || null;
 
   userEmailEl.textContent = email;
   if (accountEmailEl) accountEmailEl.textContent = email;
-  if (accountIdEl) accountIdEl.textContent = id || "—";
-  if (accountCreatedEl)
-    accountCreatedEl.textContent = createdAt ? formatDateTime(createdAt) : "—";
+  if (accountRoleEl) accountRoleEl.textContent = role || "—";
 
   userAvatarEl.textContent = firstLetterFromEmail(email);
   authScreen.classList.add("card--hidden");
@@ -108,6 +107,7 @@ function showHome(user) {
   homeScreen.removeAttribute("aria-hidden");
 
   setLocationIdle();
+  fetchEmergencies();
 }
 
 function setLoading(button, isLoading, text) {
@@ -176,10 +176,13 @@ function updateMapWithLocation(latitude, longitude, accuracy) {
       zoomControl: false,
     });
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: "© OpenStreetMap contributors",
-    }).addTo(mapInstance);
+    L.tileLayer(
+      "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+      {
+        maxZoom: 19,
+        attribution: "© OpenStreetMap, © CARTO",
+      }
+    ).addTo(mapInstance);
   } else {
     mapInstance.setView(center, 18);
   }
@@ -208,10 +211,13 @@ function updateMapWithEmergency(latitude, longitude) {
       zoomControl: false,
     });
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: "© OpenStreetMap contributors",
-    }).addTo(mapInstance);
+    L.tileLayer(
+      "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+      {
+        maxZoom: 19,
+        attribution: "© OpenStreetMap, © CARTO",
+      }
+    ).addTo(mapInstance);
   } else {
     mapInstance.setView(center, 17);
   }
@@ -230,6 +236,93 @@ function updateMapWithEmergency(latitude, longitude) {
   }
 }
 
+function refreshEmergencyMarkers() {
+  const mapElement = document.getElementById("map");
+  if (!mapElement || typeof L === "undefined") {
+    return;
+  }
+
+  // Remove old markers
+  if (mapInstance && Array.isArray(emergencyMarkers)) {
+    emergencyMarkers.forEach((m) => {
+      try {
+        mapInstance.removeLayer(m);
+      } catch (e) {
+        console.error(e);
+      }
+    });
+  }
+  emergencyMarkers = [];
+
+  let bounds = null;
+
+  for (const e of emergenciesList) {
+    const rawLat = e.latitude ?? e.lat ?? e.lat_deg ?? e.Latitude;
+    const rawLon = e.longitude ?? e.lon ?? e.lng ?? e.lon_deg ?? e.Longitude;
+    let lat = typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
+    let lon = typeof rawLon === "number" ? rawLon : parseFloat(rawLon);
+
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      if (lon >= -90 && lon <= 90 && lat >= -180 && lat <= 180) {
+        [lat, lon] = [lon, lat];
+      }
+    }
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+    const center = [lat, lon];
+
+    if (!mapInstance) {
+      mapInstance = L.map(mapElement, {
+        center,
+        zoom: 14,
+        zoomControl: false,
+      });
+
+      L.tileLayer(
+        "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        {
+          maxZoom: 19,
+          attribution: "© OpenStreetMap, © CARTO",
+        }
+      ).addTo(mapInstance);
+    }
+
+    const marker = L.circleMarker(center, {
+      radius: 8,
+      color: "#b91c1c",
+      fillColor: "#ef4444",
+      fillOpacity: 0.9,
+      weight: 2,
+      title: e.title || "Emergency location",
+    }).addTo(mapInstance);
+
+    emergencyMarkers.push(marker);
+
+    if (!bounds) {
+      bounds = L.latLngBounds(center, center);
+    } else {
+      bounds.extend(center);
+    }
+  }
+
+  // Include user location in bounds if present
+  if (mapInstance && userMarker && userMarker.getLatLng) {
+    const userLatLng = userMarker.getLatLng();
+    if (userLatLng) {
+      if (!bounds) {
+        bounds = L.latLngBounds(userLatLng, userLatLng);
+      } else {
+        bounds.extend(userLatLng);
+      }
+    }
+  }
+
+  if (mapInstance && bounds) {
+    mapInstance.fitBounds(bounds, { padding: [20, 20], maxZoom: 17 });
+  }
+}
+
 function playEmergencySound() {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -240,54 +333,61 @@ function playEmergencySound() {
     }
 
     const now = audioCtx.currentTime;
-    const totalDuration = 2.0;
-
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
 
-    osc.type = "sawtooth";
+    osc.type = "square";
 
-    // Siren-style pitch sweep: high-low-high
-    osc.frequency.setValueAtTime(1200, now);
-    osc.frequency.linearRampToValueAtTime(600, now + 0.7);
-    osc.frequency.linearRampToValueAtTime(1200, now + 1.4);
+    // Three urgent beeps: high–low–high
+    const scheduleBeep = (startOffset, duration, freq) => {
+      osc.frequency.setValueAtTime(freq, now + startOffset);
+      gain.gain.setValueAtTime(0.001, now + startOffset);
+      gain.gain.exponentialRampToValueAtTime(
+        0.7,
+        now + startOffset + 0.02
+      );
+      gain.gain.exponentialRampToValueAtTime(
+        0.001,
+        now + startOffset + duration
+      );
+    };
 
-    // Loud envelope but not clipping
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.exponentialRampToValueAtTime(0.6, now + 0.05);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + totalDuration);
+    scheduleBeep(0.0, 0.25, 1400);
+    scheduleBeep(0.35, 0.25, 900);
+    scheduleBeep(0.7, 0.3, 1500);
 
     osc.connect(gain);
     gain.connect(audioCtx.destination);
 
     osc.start(now);
-    osc.stop(now + totalDuration);
+    osc.stop(now + 1.2);
   } catch (e) {
     console.error(e);
   }
 }
 
-function showEmergencyToast(title, message) {
-  if (!emergencyToastEl) return;
+function showEmergencyPopup(title, description, locationText) {
+  if (!emergencyPopupOverlayEl) return;
 
-  if (emergencyToastTitleEl) {
-    emergencyToastTitleEl.textContent = title || "Emergency alert";
+  if (emergencyPopupTitleEl) {
+    emergencyPopupTitleEl.textContent = title || "Emergency alert";
   }
-  if (emergencyToastBodyEl) {
-    emergencyToastBodyEl.textContent = message || "";
+  if (emergencyPopupDescEl) {
+    emergencyPopupDescEl.textContent = description || "An emergency has been reported.";
   }
-
-  emergencyToastEl.classList.remove("emergency-toast--hidden");
-  emergencyToastEl.classList.add("emergency-toast--visible");
-
-  if (emergencyToastTimeoutId !== null) {
-    clearTimeout(emergencyToastTimeoutId);
+  if (emergencyPopupLocationEl) {
+    emergencyPopupLocationEl.textContent = locationText ? `Location: ${locationText}` : "";
+    emergencyPopupLocationEl.style.display = locationText ? "block" : "none";
   }
 
-  emergencyToastTimeoutId = setTimeout(() => {
-    emergencyToastEl.classList.remove("emergency-toast--visible");
-    emergencyToastEl.classList.add("emergency-toast--hidden");
-  }, 6000);
+  emergencyPopupOverlayEl.classList.remove("emergency-popup--hidden");
+  emergencyPopupOverlayEl.classList.add("emergency-popup--visible");
+}
+
+function hideEmergencyPopup() {
+  if (!emergencyPopupOverlayEl) return;
+  emergencyPopupOverlayEl.classList.remove("emergency-popup--visible");
+  emergencyPopupOverlayEl.classList.add("emergency-popup--hidden");
 }
 
 function handleIncomingEmergency(emergency) {
@@ -295,31 +395,172 @@ function handleIncomingEmergency(emergency) {
 
   const title = emergency.title || "Emergency";
   const description = emergency.description || "";
-  const lat = emergency.latitude;
-  const lon = emergency.longitude;
+  const emergencyRoleRaw = emergency.role ?? emergency.Role;
+  const emergencyRole = emergencyRoleRaw ? String(emergencyRoleRaw).toLowerCase() : "";
+  const userRole = currentUser?.user_metadata?.role
+    ? String(currentUser.user_metadata.role).toLowerCase()
+    : "";
 
-  if (emergencyLatestEl) {
-    const parts = [];
-    parts.push(title);
-    if (description) parts.push(description);
-    if (typeof lat === "number" && typeof lon === "number") {
-      parts.push(`@ ${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+  // Filter by role: show all if user has no role, or if emergency has no role / 'all',
+  // or if roles match.
+  if (
+    userRole &&
+    emergencyRole &&
+    emergencyRole !== "all" &&
+    emergencyRole !== userRole
+  ) {
+    return;
+  }
+
+  // Support multiple column names (Supabase/Postgres can vary) and parse strings
+  const rawLat =
+    emergency.latitude ?? emergency.lat ?? emergency.lat_deg ?? emergency.Latitude;
+  const rawLon =
+    emergency.longitude ?? emergency.lon ?? emergency.lng ?? emergency.lon_deg ?? emergency.Longitude;
+  let lat = typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
+  let lon = typeof rawLon === "number" ? rawLon : parseFloat(rawLon);
+
+  // Fix swapped lat/lon: latitude must be [-90,90], longitude [-180,180]
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+    if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+      // Valid as-is
+    } else if (lon >= -90 && lon <= 90 && lat >= -180 && lat <= 180) {
+      [lat, lon] = [lon, lat]; // was swapped
+    } else {
+      lat = Number.NaN;
+      lon = Number.NaN;
     }
-    emergencyLatestEl.textContent = parts.join(" – ");
   }
 
-  if (typeof lat === "number" && typeof lon === "number") {
-    updateMapWithEmergency(lat, lon);
-  }
+  const coordsValid = Number.isFinite(lat) && Number.isFinite(lon);
 
-  const toastMessage =
-    description ||
-    (typeof lat === "number" && typeof lon === "number"
-      ? `Location: ${lat.toFixed(4)}, ${lon.toFixed(4)}`
-      : "Check the emergencies panel.");
+  // Add to list and re-render
+  emergenciesList.unshift(emergency);
+  renderEmergencyList(emergenciesList);
 
-  showEmergencyToast(title, toastMessage);
+  const locationText = coordsValid
+    ? `${lat.toFixed(4)}, ${lon.toFixed(4)}`
+    : "";
+
+  showEmergencyPopup(title, description, locationText);
   playEmergencySound();
+}
+
+function renderEmergencyList(emergencies) {
+  if (!emergencyListEl) return;
+
+  emergencyListEl.innerHTML = "";
+
+  if (emergencyEmptyEl) {
+    emergencyEmptyEl.style.display = emergencies.length === 0 ? "block" : "none";
+  }
+
+  for (const e of emergencies) {
+    const rawLat = e.latitude ?? e.lat ?? e.lat_deg ?? e.Latitude;
+    const rawLon = e.longitude ?? e.lon ?? e.lng ?? e.lon_deg ?? e.Longitude;
+    let lat = typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
+    let lon = typeof rawLon === "number" ? rawLon : parseFloat(rawLon);
+    if (lon >= -90 && lon <= 90 && lat >= -180 && lat <= 180) {
+      [lat, lon] = [lon, lat];
+    }
+    const coordsValid = Number.isFinite(lat) && Number.isFinite(lon);
+    const title = e.title || "Emergency";
+    const description = e.description || "";
+    const rawRole = e.role ?? e.Role;
+    const role = rawRole ? String(rawRole) : "";
+    const rawImportance = e.importance ?? e.Importance;
+    const importanceNum = Number.isFinite(rawImportance)
+      ? rawImportance
+      : parseInt(rawImportance, 10);
+    let importanceLabel = "";
+    let importanceClass = "normal";
+    if (Number.isFinite(importanceNum)) {
+      if (importanceNum >= 3) {
+        importanceLabel = "Critical";
+        importanceClass = "critical";
+      } else if (importanceNum === 2) {
+        importanceLabel = "High";
+        importanceClass = "high";
+      } else {
+        importanceLabel = "Normal";
+        importanceClass = "normal";
+      }
+    }
+
+    const li = document.createElement("li");
+    li.className = "emergency-item";
+
+    const roleClass =
+      role && typeof role === "string"
+        ? `emergency-role-pill--${role.toLowerCase()}`
+        : "";
+
+    li.innerHTML =
+      `<div class="emergency-status-dot emergency-status-dot--${importanceClass}"></div>` +
+      `<div class="emergency-item-main">` +
+      `<span class="emergency-item-title">${escapeHtml(title)}</span>` +
+      (description
+        ? `<p class="emergency-item-desc">${escapeHtml(description)}</p>`
+        : "") +
+      (coordsValid
+        ? `<p class="emergency-item-coords">${lat.toFixed(
+            4
+          )}, ${lon.toFixed(4)}</p>`
+        : "") +
+      `</div>` +
+      `<div class="emergency-item-meta">` +
+      (role
+        ? `<span class="emergency-role-pill ${roleClass}">${escapeHtml(
+            String(role).toUpperCase()
+          )}</span>`
+        : "") +
+      (importanceLabel
+        ? `<span class="emergency-importance">${importanceLabel}</span>`
+        : "") +
+      `</div>`;
+    emergencyListEl.appendChild(li);
+  }
+
+  refreshEmergencyMarkers();
+}
+
+function escapeHtml(text) {
+  if (!text) return "";
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+async function fetchEmergencies() {
+  if (!client) return;
+  try {
+    const { data, error } = await client
+      .from("emergencies")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error(error);
+      return;
+    }
+    const all = data || [];
+    const userRole = currentUser?.user_metadata?.role
+      ? String(currentUser.user_metadata.role).toLowerCase()
+      : "";
+
+    const filtered = all.filter((e) => {
+      const rawRole = e.role ?? e.Role;
+      const emergencyRole = rawRole ? String(rawRole).toLowerCase() : "";
+      if (!userRole) return true;
+      if (!emergencyRole || emergencyRole === "all") return true;
+      return emergencyRole === userRole;
+    });
+
+    emergenciesList = filtered;
+    renderEmergencyList(emergenciesList);
+  } catch (err) {
+    console.error(err);
+  }
 }
 
 function setupEmergencyRealtime() {
@@ -386,6 +627,7 @@ function requestLocationOnce() {
               latitude,
               longitude,
               accuracy_m: Number.isFinite(accuracy) ? accuracy : null,
+              role: userForLocation.user_metadata?.role || null,
             },
             { onConflict: "user_id" }
           );
@@ -515,9 +757,10 @@ signupForm.addEventListener("submit", async (event) => {
   const email = signupForm.elements.email.value.trim();
   const password = signupForm.elements.password.value;
   const passwordConfirm = signupForm.elements.passwordConfirm.value;
+  const role = (signupForm.elements.role?.value || "").trim();
 
-  if (!email || !password) {
-    setAuthMessage("Email and password are required.", "error");
+  if (!email || !password || !role) {
+    setAuthMessage("Email, password, and role are required.", "error");
     return;
   }
 
@@ -537,6 +780,11 @@ signupForm.addEventListener("submit", async (event) => {
   const { data, error } = await client.auth.signUp({
     email,
     password,
+    options: {
+      data: {
+        role,
+      },
+    },
   });
 
   setLoading(signupSubmit, false);
@@ -591,6 +839,12 @@ tabSignup.addEventListener("click", () => {
   loginForm.classList.remove("active");
   setAuthMessage("");
 });
+
+if (emergencyPopupCloseEl) {
+  emergencyPopupCloseEl.addEventListener("click", () => {
+    hideEmergencyPopup();
+  });
+}
 
 if (getLocationButton) {
   getLocationButton.addEventListener("click", () => {
