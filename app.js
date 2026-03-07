@@ -400,6 +400,12 @@ function handleIncomingEmergency(emergency) {
   const userRole = currentUser?.user_metadata?.role
     ? String(currentUser.user_metadata.role).toLowerCase()
     : "";
+  const userId = currentUser?.id || null;
+
+  // Only show emergencies whose id matches this user's id (assigned to them)
+  if (userId && emergency.id && emergency.id !== userId) {
+    return;
+  }
 
   // Filter by role: show all if user has no role, or if emergency has no role / 'all',
   // or if roles match.
@@ -544,11 +550,15 @@ async function fetchEmergencies() {
       return;
     }
     const all = data || [];
+    const userId = currentUser?.id || null;
     const userRole = currentUser?.user_metadata?.role
       ? String(currentUser.user_metadata.role).toLowerCase()
       : "";
 
     const filtered = all.filter((e) => {
+      if (userId && e.id && e.id !== userId) {
+        return false;
+      }
       const rawRole = e.role ?? e.Role;
       const emergencyRole = rawRole ? String(rawRole).toLowerCase() : "";
       if (!userRole) return true;
