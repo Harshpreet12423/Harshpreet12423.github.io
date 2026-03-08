@@ -30,6 +30,11 @@ const emergencyPopupTitleEl = document.getElementById("emergency-popup-title");
 const emergencyPopupDescEl = document.getElementById("emergency-popup-desc");
 const emergencyPopupLocationEl = document.getElementById("emergency-popup-location");
 const emergencyPopupCloseEl = document.getElementById("emergency-popup-close");
+const emergencyPopupActionsEl = document.getElementById("emergency-popup-actions");
+const emergencyPopupResolveEl = document.getElementById("emergency-popup-resolve");
+const emergencyPopupCancelEl = document.getElementById("emergency-popup-cancel");
+
+let emergencyPopupCurrent = null;
 
 const loginForm = document.getElementById("login-form");
 const signupForm = document.getElementById("signup-form");
@@ -366,8 +371,10 @@ function playEmergencySound() {
   }
 }
 
-function showEmergencyPopup(title, description, locationText) {
+function showEmergencyPopup(title, description, locationText, emergency = null) {
   if (!emergencyPopupOverlayEl) return;
+
+  emergencyPopupCurrent = emergency;
 
   if (emergencyPopupTitleEl) {
     emergencyPopupTitleEl.textContent = title || "Emergency alert";
@@ -380,6 +387,14 @@ function showEmergencyPopup(title, description, locationText) {
     emergencyPopupLocationEl.style.display = locationText ? "block" : "none";
   }
 
+  if (emergencyPopupActionsEl) {
+    if (emergency) {
+      emergencyPopupActionsEl.classList.remove("emergency-popup-actions--hidden");
+    } else {
+      emergencyPopupActionsEl.classList.add("emergency-popup-actions--hidden");
+    }
+  }
+
   emergencyPopupOverlayEl.classList.remove("emergency-popup--hidden");
   emergencyPopupOverlayEl.classList.add("emergency-popup--visible");
 }
@@ -388,6 +403,7 @@ function hideEmergencyPopup() {
   if (!emergencyPopupOverlayEl) return;
   emergencyPopupOverlayEl.classList.remove("emergency-popup--visible");
   emergencyPopupOverlayEl.classList.add("emergency-popup--hidden");
+  emergencyPopupCurrent = null;
 }
 
 function handleIncomingEmergency(emergency) {
@@ -448,7 +464,7 @@ function handleIncomingEmergency(emergency) {
     ? `${lat.toFixed(4)}, ${lon.toFixed(4)}`
     : "";
 
-  showEmergencyPopup(title, description, locationText);
+  showEmergencyPopup(title, description, locationText, emergency);
   playEmergencySound();
 }
 
@@ -495,6 +511,7 @@ function renderEmergencyList(emergencies) {
 
     const li = document.createElement("li");
     li.className = "emergency-item";
+    li.dataset.emergencyIndex = String(emergencies.indexOf(e));
 
     const roleClass =
       role && typeof role === "string"
@@ -506,7 +523,10 @@ function renderEmergencyList(emergencies) {
       `<div class="emergency-item-main">` +
       `<span class="emergency-item-title">${escapeHtml(title)}</span>` +
       (description
-        ? `<p class="emergency-item-desc">${escapeHtml(description)}</p>`
+        ? `<div class="emergency-item-desc-block" role="button" tabindex="0" aria-expanded="false" aria-label="Expand description">` +
+          `<p class="emergency-item-desc emergency-item-desc--collapsed">${escapeHtml(description)}</p>` +
+          `<span class="emergency-item-expand-hint">Show more</span>` +
+          `</div>`
         : "") +
       (coordsValid
         ? `<p class="emergency-item-coords">${lat.toFixed(
@@ -526,6 +546,59 @@ function renderEmergencyList(emergencies) {
       `</div>`;
     emergencyListEl.appendChild(li);
   }
+
+  // Event delegation for expand/collapse (stop propagation so tile click doesn't fire)
+  emergencyListEl.querySelectorAll(".emergency-item-desc-block").forEach((block) => {
+    block.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const desc = block.querySelector(".emergency-item-desc");
+      const hint = block.querySelector(".emergency-item-expand-hint");
+      if (!desc || !hint) return;
+      const isExpanded = desc.classList.contains("emergency-item-desc--expanded");
+      if (isExpanded) {
+        desc.classList.remove("emergency-item-desc--expanded");
+        desc.classList.add("emergency-item-desc--collapsed");
+        hint.textContent = "Show more";
+        block.setAttribute("aria-expanded", "false");
+      } else {
+        desc.classList.remove("emergency-item-desc--collapsed");
+        desc.classList.add("emergency-item-desc--expanded");
+        hint.textContent = "Show less";
+        block.setAttribute("aria-expanded", "true");
+      }
+    });
+    block.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        block.click();
+      }
+    });
+  });
+
+  // Click on tile to open popup with action menu
+  emergencyListEl.querySelectorAll(".emergency-item").forEach((li) => {
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => {
+      const idx = parseInt(li.dataset.emergencyIndex, 10);
+      if (Number.isNaN(idx) || idx < 0 || idx >= emergenciesList.length) return;
+      const e = emergenciesList[idx];
+      const rawLat = e.latitude ?? e.lat ?? e.lat_deg ?? e.Latitude;
+      const rawLon = e.longitude ?? e.lon ?? e.lng ?? e.lon_deg ?? e.Longitude;
+      let lat = typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
+      let lon = typeof rawLon === "number" ? rawLon : parseFloat(rawLon);
+      if (lon >= -90 && lon <= 90 && lat >= -180 && lat <= 180) {
+        [lat, lon] = [lon, lat];
+      }
+      const coordsValid = Number.isFinite(lat) && Number.isFinite(lon);
+      const locationText = coordsValid ? `${lat.toFixed(4)}, ${lon.toFixed(4)}` : "";
+      showEmergencyPopup(
+        e.title || "Emergency",
+        e.description || "",
+        locationText,
+        e
+      );
+    });
+  });
 
   refreshEmergencyMarkers();
 }
@@ -853,6 +926,38 @@ tabSignup.addEventListener("click", () => {
 if (emergencyPopupCloseEl) {
   emergencyPopupCloseEl.addEventListener("click", () => {
     hideEmergencyPopup();
+  });
+}
+
+if (emergencyPopupCancelEl) {
+  emergencyPopupCancelEl.addEventListener("click", () => {
+    hideEmergencyPopup();
+  });
+}
+
+if (emergencyPopupResolveEl) {
+  emergencyPopupResolveEl.addEventListener("click", async () => {
+    const emergency = emergencyPopupCurrent;
+    if (!emergency) return;
+
+    hideEmergencyPopup();
+
+    // Remove from local list
+    emergenciesList = emergenciesList.filter((item) => item !== emergency);
+    renderEmergencyList(emergenciesList);
+
+    // Try to update status in Supabase (table may have status column)
+    if (client && emergency.id) {
+      try {
+        const { error } = await client
+          .from("emergencies")
+          .update({ status: "resolved" })
+          .eq("id", emergency.id);
+        if (error) console.warn("Could not update emergency status:", error);
+      } catch (err) {
+        console.warn("Could not update emergency status:", err);
+      }
+    }
   });
 }
 
